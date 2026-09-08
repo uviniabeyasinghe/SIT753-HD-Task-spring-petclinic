@@ -72,5 +72,29 @@ pipeline {
                 }
             }
         }
+
+        stage('Code Quality') {
+            steps {
+                echo 'Running SonarQube code quality analysis...'
+
+                withSonarQubeEnv('SonarQube') {
+                    bat '''
+                        call mvnw.cmd -B --no-transfer-progress ^
+                        org.sonarsource.scanner.maven:sonar-maven-plugin:sonar ^
+                        -Dsonar.projectKey=sit753-petclinic ^
+                        -Dsonar.projectName="Spring PetClinic - SIT753" ^
+                        -Dsonar.coverage.jacoco.xmlReportPaths=target/site/jacoco/jacoco.xml
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
     }
 }
