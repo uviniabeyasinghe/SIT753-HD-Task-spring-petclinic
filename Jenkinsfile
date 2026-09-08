@@ -96,5 +96,44 @@ pipeline {
                 }
             }
         }
+
+        stage('Security') {
+            steps {
+                echo 'Running Trivy security scan...'
+
+                bat '''
+                    if not exist security-reports mkdir security-reports
+
+                    "C:\\Trivy\\trivy.exe" fs ^
+                    --scanners vuln,secret,misconfig ^
+                    --severity HIGH,CRITICAL ^
+                    --format table ^
+                    --output security-reports\\trivy-high-critical-report.txt .
+                '''
+
+                script {
+                    def trivyStatus = bat(
+                        returnStatus: true,
+                        script: '''
+                            "C:\\Trivy\\trivy.exe" fs ^
+                            --scanners vuln ^
+                            --severity HIGH,CRITICAL ^
+                            --exit-code 1 .
+                        '''
+                    )
+
+                    if (trivyStatus != 0) {
+                        error 'Security Gate FAILED: HIGH or CRITICAL dependency vulnerabilities were detected.'
+                    }
+                }
+            }
+
+            post {
+                always {
+                    archiveArtifacts artifacts: 'security-reports/*.txt',
+                                    allowEmptyArchive: true
+                }
+            }
+        }
     }
 }
