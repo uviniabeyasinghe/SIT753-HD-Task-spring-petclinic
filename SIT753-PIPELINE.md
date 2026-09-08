@@ -30,3 +30,7 @@ The Jenkins pipeline developed for this task will contain the following seven st
 - Security: Trivy
 - Deployment: Docker
 - Monitoring: Prometheus and Grafana
+
+## Build Automation
+
+The Jenkins pipeline uses SCM polling to automatically detect changes pushed to the GitHub repository.
