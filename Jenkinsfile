@@ -54,5 +54,23 @@ pipeline {
                 archiveArtifacts artifacts: 'target/build-info.txt', fingerprint: true
             }
         }
+
+        stage('Test') {
+            steps {
+                echo 'Running automated Spring PetClinic tests...'
+
+                bat 'call mvnw.cmd -B --no-transfer-progress test jacoco:report'
+            }
+
+            post {
+                always {
+                    junit testResults: 'target/surefire-reports/*.xml',
+                          allowEmptyResults: false
+
+                    archiveArtifacts artifacts: 'target/site/jacoco/**',
+                                     allowEmptyArchive: true
+                }
+            }
+        }
     }
 }
