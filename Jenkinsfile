@@ -178,5 +178,56 @@ pipeline {
                 '''
             }
         }
+
+        stage('Release') {
+            steps {
+                echo 'Promoting tested staging image to production...'
+
+                bat '''
+                    echo Creating versioned release image...
+                    docker tag sit753-petclinic:staging sit753-petclinic:v1.0.%BUILD_NUMBER%
+
+                    echo Creating production tag...
+                    docker tag sit753-petclinic:staging sit753-petclinic:production
+
+                    echo Removing previous production container if it exists...
+                    docker rm -f sit753-petclinic-production 2>NUL || echo No previous production container found.
+
+                    echo Starting production container...
+                    docker run -d ^
+                    --name sit753-petclinic-production ^
+                    -p 8082:8080 ^
+                    sit753-petclinic:v1.0.%BUILD_NUMBER%
+
+                    echo Production container:
+                    docker ps --filter "name=sit753-petclinic-production"
+                '''
+
+                echo 'Waiting for production application to start...'
+
+                sleep time: 15, unit: 'SECONDS'
+
+                bat '''
+                    echo Verifying production health...
+                    curl --fail http://localhost:8082/actuator/health
+
+                    if %ERRORLEVEL% NEQ 0 (
+                        echo ERROR: Production health check failed.
+                        docker logs sit753-petclinic-production
+                        exit /b 1
+                    )
+
+                    echo Production release health check PASSED.
+
+                    echo Release Version: v1.0.%BUILD_NUMBER% > release-info.txt
+                    echo Jenkins Build: %BUILD_NUMBER% >> release-info.txt
+                    echo Environment: Production >> release-info.txt
+                    echo Production URL: http://localhost:8082 >> release-info.txt
+                '''
+
+                archiveArtifacts artifacts: 'release-info.txt',
+                                allowEmptyArchive: false
+            }
+        }
     }
 }
