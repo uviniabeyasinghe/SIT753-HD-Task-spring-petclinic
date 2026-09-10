@@ -135,5 +135,48 @@ pipeline {
                 }
             }
         }
+
+        stage('Deploy') {
+            steps {
+                echo 'Deploying Spring PetClinic to Docker staging environment...'
+
+                bat '''
+                    echo Verifying Docker availability...
+                    docker --version
+
+                    echo Building staging Docker image...
+                    docker build -t sit753-petclinic:staging .
+
+                    echo Removing previous staging container if it exists...
+                    docker rm -f sit753-petclinic-staging 2>NUL || echo No previous staging container found.
+
+                    echo Starting new staging container...
+                    docker run -d ^
+                    --name sit753-petclinic-staging ^
+                    -p 8081:8080 ^
+                    sit753-petclinic:staging
+
+                    echo Current running containers:
+                    docker ps
+                '''
+
+                echo 'Waiting for Spring PetClinic to start...'
+
+                sleep time: 15, unit: 'SECONDS'
+
+                bat '''
+                    echo Checking application health...
+                    curl --fail http://localhost:8081/actuator/health
+
+                    if %ERRORLEVEL% NEQ 0 (
+                        echo ERROR: Staging application health check failed.
+                        docker logs sit753-petclinic-staging
+                        exit /b 1
+                    )
+
+                    echo Staging deployment health check passed.
+                '''
+            }
+        }
     }
 }
