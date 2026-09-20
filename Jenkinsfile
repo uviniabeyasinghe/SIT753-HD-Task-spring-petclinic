@@ -348,10 +348,16 @@ pipeline {
             }
         }
 
+
         stage('Monitoring') {
             steps {
                 echo 'Verifying production monitoring and alerting services...'
 
+                /*
+                 * First confirm the three main services themselves
+                 * are reachable before asking Prometheus for the
+                 * production target state.
+                 */
                 bat '''
                     echo ========================================
                     echo Monitoring Verification
@@ -359,6 +365,7 @@ pipeline {
 
                     echo.
                     echo [1/4] Checking production application...
+
                     curl --fail --silent --show-error ^
                     http://localhost:8082/actuator/health ^
                     > monitoring-production-health.txt
@@ -369,11 +376,14 @@ pipeline {
                     )
 
                     type monitoring-production-health.txt
+
                     echo.
                     echo Production application health check PASSED.
 
+
                     echo.
                     echo [2/4] Checking Prometheus readiness...
+
                     curl --fail --silent --show-error ^
                     http://localhost:9090/-/ready ^
                     > monitoring-prometheus-ready.txt
@@ -384,11 +394,14 @@ pipeline {
                     )
 
                     type monitoring-prometheus-ready.txt
+
                     echo.
                     echo Prometheus readiness check PASSED.
 
+
                     echo.
                     echo [3/4] Checking Alertmanager readiness...
+
                     curl --fail --silent --show-error ^
                     http://localhost:9093/-/ready ^
                     > monitoring-alertmanager-ready.txt
@@ -399,42 +412,109 @@ pipeline {
                     )
 
                     type monitoring-alertmanager-ready.txt
+
                     echo.
                     echo Alertmanager readiness check PASSED.
+
 
                     echo.
                     echo [4/4] Checking Prometheus production target...
                 '''
 
+
+                /*
+                 * Prometheus may temporarily report 0 immediately
+                 * after Release recreates the production container.
+                 *
+                 * Retry instead of failing on the first scrape.
+                 */
                 powershell '''
-                    $response = Invoke-RestMethod `
-                        -Uri 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22spring-petclinic-production%22%7D'
+                    Write-Host ""
+                    Write-Host "========================================"
+                    Write-Host "Prometheus Production Target Verification"
+                    Write-Host "========================================"
+                    Write-Host ""
 
-                    $response | ConvertTo-Json -Depth 10 |
-                        Out-File -Encoding utf8 monitoring-prometheus-target.json
+                    Write-Host "Waiting for Prometheus to detect the new production deployment..."
 
-                    if ($response.status -ne 'success') {
-                        Write-Error 'Prometheus query failed.'
+                    $maxAttempts = 12
+                    $targetHealthy = $false
+
+                    for ($i = 1; $i -le $maxAttempts; $i++) {
+
+                        Write-Host ""
+                        Write-Host "Prometheus target check attempt $i of $maxAttempts..."
+
+                        try {
+
+                            $response = Invoke-RestMethod `
+                                -Uri 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22spring-petclinic-production%22%7D'
+
+                            $response |
+                                ConvertTo-Json -Depth 10 |
+                                Out-File -Encoding utf8 monitoring-prometheus-target.json
+
+                            if ($response.status -eq 'success') {
+
+                                if ($response.data.result.Count -gt 0) {
+
+                                    $targetValue = [string]$response.data.result[0].value[1]
+
+                                    Write-Host "Production target value: $targetValue"
+
+                                    if ($targetValue -eq '1') {
+
+                                        Write-Host ""
+                                        Write-Host "Prometheus production target is UP."
+
+                                        $targetHealthy = $true
+                                        break
+                                    }
+                                    else {
+                                        Write-Host "Prometheus currently reports the production target as DOWN."
+                                    }
+                                }
+                                else {
+                                    Write-Host "Production target is not available in the Prometheus query result yet."
+                                }
+                            }
+                            else {
+                                Write-Host "Prometheus query did not return success."
+                            }
+                        }
+                        catch {
+                            Write-Host "Prometheus query is not ready yet."
+                            Write-Host $_.Exception.Message
+                        }
+
+                        if ($i -lt $maxAttempts) {
+                            Write-Host "Waiting 5 seconds before retrying..."
+                            Start-Sleep -Seconds 5
+                        }
+                    }
+
+                    if (-not $targetHealthy) {
+
+                        Write-Host ""
+                        Write-Host "========================================"
+                        Write-Host "ERROR: Monitoring verification failed"
+                        Write-Host "========================================"
+
+                        Write-Error "Production monitoring target did not become UP after $maxAttempts attempts."
                         exit 1
                     }
 
-                    if ($response.data.result.Count -eq 0) {
-                        Write-Error 'Spring PetClinic production target was not found in Prometheus.'
-                        exit 1
-                    }
-
-                    $targetValue = $response.data.result[0].value[1]
-
-                    Write-Host "Production target value: $targetValue"
-
-                    if ($targetValue -ne '1') {
-                        Write-Error 'Production monitoring target is DOWN.'
-                        exit 1
-                    }
-
-                    Write-Host 'Prometheus production target is UP.'
+                    Write-Host ""
+                    Write-Host "========================================"
+                    Write-Host "Prometheus production target check PASSED"
+                    Write-Host "========================================"
                 '''
 
+
+                /*
+                 * Create a summary artifact after all monitoring
+                 * checks have passed.
+                 */
                 bat '''
                     echo.
                     echo ========================================
@@ -449,10 +529,15 @@ pipeline {
                     echo Monitoring Target: UP >> monitoring-status.txt
                     echo Jenkins Build: %BUILD_NUMBER% >> monitoring-status.txt
                     echo Version: %APP_VERSION% >> monitoring-status.txt
+
+                    echo.
+                    echo ===== Monitoring Summary =====
+                    type monitoring-status.txt
+                    echo ==============================
                 '''
 
                 archiveArtifacts artifacts: 'monitoring-*.txt, monitoring-*.json',
-                                allowEmptyArchive: false
+                                 allowEmptyArchive: false
             }
         }
     }
