@@ -347,5 +347,113 @@ pipeline {
                                  allowEmptyArchive: true
             }
         }
+
+        stage('Monitoring') {
+            steps {
+                echo 'Verifying production monitoring and alerting services...'
+
+                bat '''
+                    echo ========================================
+                    echo Monitoring Verification
+                    echo ========================================
+
+                    echo.
+                    echo [1/4] Checking production application...
+                    curl --fail --silent --show-error ^
+                    http://localhost:8082/actuator/health ^
+                    > monitoring-production-health.txt
+
+                    if errorlevel 1 (
+                        echo ERROR: Production application is not healthy.
+                        exit /b 1
+                    )
+
+                    type monitoring-production-health.txt
+                    echo.
+                    echo Production application health check PASSED.
+
+                    echo.
+                    echo [2/4] Checking Prometheus readiness...
+                    curl --fail --silent --show-error ^
+                    http://localhost:9090/-/ready ^
+                    > monitoring-prometheus-ready.txt
+
+                    if errorlevel 1 (
+                        echo ERROR: Prometheus is not ready.
+                        exit /b 1
+                    )
+
+                    type monitoring-prometheus-ready.txt
+                    echo.
+                    echo Prometheus readiness check PASSED.
+
+                    echo.
+                    echo [3/4] Checking Alertmanager readiness...
+                    curl --fail --silent --show-error ^
+                    http://localhost:9093/-/ready ^
+                    > monitoring-alertmanager-ready.txt
+
+                    if errorlevel 1 (
+                        echo ERROR: Alertmanager is not ready.
+                        exit /b 1
+                    )
+
+                    type monitoring-alertmanager-ready.txt
+                    echo.
+                    echo Alertmanager readiness check PASSED.
+
+                    echo.
+                    echo [4/4] Checking Prometheus production target...
+                '''
+
+                powershell '''
+                    $response = Invoke-RestMethod `
+                        -Uri 'http://localhost:9090/api/v1/query?query=up%7Bjob%3D%22spring-petclinic-production%22%7D'
+
+                    $response | ConvertTo-Json -Depth 10 |
+                        Out-File -Encoding utf8 monitoring-prometheus-target.json
+
+                    if ($response.status -ne 'success') {
+                        Write-Error 'Prometheus query failed.'
+                        exit 1
+                    }
+
+                    if ($response.data.result.Count -eq 0) {
+                        Write-Error 'Spring PetClinic production target was not found in Prometheus.'
+                        exit 1
+                    }
+
+                    $targetValue = $response.data.result[0].value[1]
+
+                    Write-Host "Production target value: $targetValue"
+
+                    if ($targetValue -ne '1') {
+                        Write-Error 'Production monitoring target is DOWN.'
+                        exit 1
+                    }
+
+                    Write-Host 'Prometheus production target is UP.'
+                '''
+
+                bat '''
+                    echo.
+                    echo ========================================
+                    echo Monitoring Verification PASSED
+                    echo ========================================
+
+                    echo Application: Spring PetClinic > monitoring-status.txt
+                    echo Environment: Production >> monitoring-status.txt
+                    echo Production URL: http://localhost:8082 >> monitoring-status.txt
+                    echo Prometheus URL: http://localhost:9090 >> monitoring-status.txt
+                    echo Alertmanager URL: http://localhost:9093 >> monitoring-status.txt
+                    echo Monitoring Target: UP >> monitoring-status.txt
+                    echo Jenkins Build: %BUILD_NUMBER% >> monitoring-status.txt
+                    echo Version: %APP_VERSION% >> monitoring-status.txt
+                '''
+
+                archiveArtifacts artifacts: 'monitoring-*.txt, monitoring-*.json',
+                                allowEmptyArchive: false
+            }
+        }
     }
 }
